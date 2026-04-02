@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
@@ -10,13 +14,15 @@ from pyspark.sql.functions import (
     round as spark_round,
     when,
 )
+from config import POSTGRES_URL, POSTGRES_PROPERTIES, MONTHS
 
 
-def transform_taxi_data(input_path, output_path, spark):
-    df = (
-        spark.read.option("header", "true")
-        .option("inferSchema", "true")
-        .csv(input_path)
+def transform_taxi_data(spark):
+    # Read from Postgres staging
+    df = spark.read.jdbc(
+        url=POSTGRES_URL,
+        table="staging.taxi_trips_cleaned",
+        properties=POSTGRES_PROPERTIES,
     )
 
     df = (
@@ -50,22 +56,27 @@ def transform_taxi_data(input_path, output_path, spark):
     df = df.filter(col("trip_distance") >= 0)
     df = df.filter(col("total_amount") >= 0)
 
-    print(f"{input_path} row count:", df.count())
+    print("Curated row count:", df.count())
     df.printSchema()
 
-    df.coalesce(1).write.mode("overwrite").option("header", True).csv(output_path)
 
-    print(f"✅ Transformed data written to {output_path}")
+    # write to postgres
+    df.write.jdbc(
+        url="jdbc:postgresql://localhost:5432/taxi_db",
+        table="curated.taxi_trips_curated",
+        mode="append",
+        properties={
+            "user": "rajesh",
+            "password": "",
+            "driver": "org.postgresql.Driver",
+        },
+    )
+
+    print("✅ Loaded into curated.taxi_trips_curated")
 
 
 if __name__ == "__main__":
     spark = SparkSession.builder.appName("TaxiTransform").getOrCreate()
-
-    months = ["October", "November", "December"]
-
-    for month_name in months:
-        input_path = f"clean_data/{month_name}"
-        output_path = f"processed_data/{month_name}"
-        transform_taxi_data(input_path, output_path, spark)
-
+    
+    transform_taxi_data(spark)
     spark.stop()
